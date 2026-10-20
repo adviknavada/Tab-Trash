@@ -1,0 +1,8 @@
+body { width: 360px; margin: 0; padding: 8px; font-family: system-ui, sans-serif; font-size: 13px; }
+#search { width: 100%; box-sizing: border-box; padding: 6px 8px; margin-bottom: 8px; }
+#list { max-height: 420px; overflow-y: auto; }
+.row { padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.row:hover { background: #eee; }
+.title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meta { color: #666; font-size: 11px; }
+.empty { color: #666; padding: 12px 8px; }

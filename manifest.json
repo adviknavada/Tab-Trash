@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Tab Trash",
+  "version": "0.1.0",
+  "description": "A 'recently deleted' for browser tabs.",
+  "permissions": ["tabs", "storage","alarms"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Tab Trash",
+    "default_popup": "popup.html"
+  }
+}
