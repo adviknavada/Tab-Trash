@@ -2,6 +2,26 @@ const listEl = document.getElementById("list");
 const searchEl = document.getElementById("search");
 
 let entries = [];
+function normalizeUrl(url) {
+  try {
+    const normalized = new URL(url);
+    normalized.hash = "";
+    for (const name of [...normalized.searchParams.keys()]) {
+      if (
+        name.toLowerCase().startsWith("utm_") ||
+        ["fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid", "_ga"].includes(
+          name.toLowerCase()
+        )
+      ) {
+        normalized.searchParams.delete(name);
+      }
+    }
+    return normalized.toString();
+  } catch {
+    return url;
+  }
+}
+
 async function loadTrash() {
   const all = await chrome.storage.local.get(null);
   entries = Object.entries(all)
@@ -30,6 +50,15 @@ function domainOf(url) {
 
 async function restore(entry) {
   await chrome.tabs.create({ url: entry.url });
+  const restoreKey = `restore:${normalizeUrl(entry.url)}`;
+  const restoreData = await chrome.storage.local.get(restoreKey);
+  const previous = restoreData[restoreKey] || { count: 0 };
+  await chrome.storage.local.set({
+    [restoreKey]: {
+      count: previous.count + 1,
+      lastRestoredAt: Date.now(),
+    },
+  });
   await chrome.storage.local.remove(entry.key);
   entries = entries.filter((e) => e.key !== entry.key);
   render();
@@ -70,6 +99,14 @@ function render() {
     const title = document.createElement("div");
     title.className = "title";
     title.textContent = entry.title || entry.url;
+    if (entry.protected) {
+      const marker = document.createElement("span");
+      marker.className = "protected";
+      marker.textContent = " ◆";
+      marker.title = "Protected";
+      marker.setAttribute("aria-label", "Protected");
+      title.append(marker);
+    }
 
     const meta = document.createElement("div");
     meta.className = "meta";
