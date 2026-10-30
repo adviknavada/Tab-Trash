@@ -47,20 +47,27 @@ function isCertainJunk(entry) {
 
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
   const key = tabKey(tabId);
-  const result = await chrome.storage.session.get(key);
+  const flag = flagKey(tabId);
+
+  const result = await chrome.storage.session.get([key, flag]);
   const entry = result[key];
-  if (!entry) return;
-  if (!isCertainJunk(entry)) {
-    const closedAt = Date.now();
-    await chrome.storage.local.set({
-      [`trash:${closedAt}:${tabId}`]: {
-        url: entry.url,
-        title: entry.title,
-        closedAt,
-      },
-    });
+  const isFlagged = Boolean(result[flag]);
+
+  if (entry) {
+    const shouldSave = isFlagged ? Boolean(entry.url) : !isCertainJunk(entry);
+
+    if (shouldSave) {
+      const closedAt = Date.now();
+      await chrome.storage.local.set({
+        [`trash:${closedAt}:${tabId}`]: {
+          url: entry.url,
+          title: entry.title,
+          closedAt,
+        },
+      });
+    }
   }
-  await chrome.storage.session.remove(key);
+  await chrome.storage.session.remove([key, flag]);
 });
 
 const RETENTION_MS = 30*24*60*60*1000; 
@@ -91,5 +98,22 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 ensureCleanupAlarm();
 chrome.runtime.onStartup.addListener(cleanupTrash);
 
+function flagKey(tabId) {
+  return `flag:${tabId}`;
+}
+chrome.commands.onCommand.addListener(async (command, tab) => {
+  if (command !== "flag-tab") return;
+  if (!tab || tab.id === undefined) return;
 
+  const key = flagKey(tab.id);
+  const existing = await chrome.storage.session.get(key);
+
+  if (existing[key]) {
+    await chrome.storage.session.remove(key);
+    await chrome.action.setBadgeText({ tabId: tab.id, text: "" });
+  } else {
+    await chrome.storage.session.set({ [key]: true });
+    await chrome.action.setBadgeText({ tabId: tab.id, text: "★" });
+  }
+});
 

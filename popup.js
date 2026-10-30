@@ -35,6 +35,12 @@ async function restore(entry) {
   render();
 }
 
+async function deleteEntry(entry) {
+  await chrome.storage.local.remove(entry.key);
+  entries = entries.filter((e) => e.key !== entry.key);
+  render();
+}
+
 function render() {
   const query = searchEl.value.trim().toLowerCase();
 
@@ -58,6 +64,9 @@ function render() {
     const row = document.createElement("div");
     row.className = "row";
 
+    const details = document.createElement("div");
+    details.className = "details";
+
     const title = document.createElement("div");
     title.className = "title";
     title.textContent = entry.title || entry.url;
@@ -66,7 +75,20 @@ function render() {
     meta.className = "meta";
     meta.textContent = `${domainOf(entry.url)} · ${timeAgo(entry.closedAt)}`;
 
-    row.append(title, meta);
+    details.append(title, meta);
+
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "delete";
+    deleteButton.type = "button";
+    deleteButton.textContent = "×";
+    deleteButton.title = "Delete permanently";
+    deleteButton.setAttribute("aria-label", "Delete permanently");
+    deleteButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteEntry(entry);
+    });
+
+    row.append(details, deleteButton);
     row.addEventListener("click", () => restore(entry));
     listEl.append(row);
   }

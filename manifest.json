@@ -10,5 +10,11 @@
   "action": {
     "default_title": "Tab Trash",
     "default_popup": "popup.html"
+  },
+  "commands": {
+  "flag-tab": {
+    "suggested_key": { "default": "Alt+Shift+K" },
+    "description": "Keep this tab: never filter it out of the trash"
   }
+}
 }
