@@ -26,8 +26,34 @@ async function loadTrash() {
   const all = await chrome.storage.local.get(null);
   entries = Object.entries(all)
     .filter(([key]) => key.startsWith("trash:"))
-    .map(([key, value]) => ({ key, ...value }))
-    .sort((a, b) => b.closedAt - a.closedAt); 
+    .map(([key, value]) => {
+      const restoreRecord = all[`restore:${normalizeUrl(value.url)}`];
+      return {
+        key,
+        ...value,
+        restoreCount: restoreRecord?.count || 0,
+      };
+    })
+    .sort((a, b) => {
+      if (Boolean(b.protected) !== Boolean(a.protected)) {
+        return Number(b.protected) - Number(a.protected);
+      }
+      if ((b.activeMs || 0) !== (a.activeMs || 0)) {
+        return (b.activeMs || 0) - (a.activeMs || 0);
+      }
+      if (b.restoreCount !== a.restoreCount) {
+        return b.restoreCount - a.restoreCount;
+      }
+      return b.closedAt - a.closedAt;
+    });
+}
+function formatDuration(milliseconds) {
+  if (typeof milliseconds !== "number") return "unknown active time";
+  const totalMinutes = Math.floor(milliseconds / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0) return `${hours}h ${minutes}m active`;
+  return `${minutes}m active`;
 }
 function timeAgo(timestamp) {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
@@ -110,7 +136,10 @@ function render() {
 
     const meta = document.createElement("div");
     meta.className = "meta";
-    meta.textContent = `${domainOf(entry.url)} · ${timeAgo(entry.closedAt)}`;
+    meta.textContent =
+      `${domainOf(entry.url)} · ${timeAgo(entry.closedAt)} · ` +
+      `${formatDuration(entry.activeMs)} · ${entry.restoreCount} restore` +
+      `${entry.restoreCount === 1 ? "" : "s"}`;
 
     details.append(title, meta);
 
