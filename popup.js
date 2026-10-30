@@ -2,26 +2,6 @@ const listEl = document.getElementById("list");
 const searchEl = document.getElementById("search");
 
 let entries = [];
-function normalizeUrl(url) {
-  try {
-    const normalized = new URL(url);
-    normalized.hash = "";
-    for (const name of [...normalized.searchParams.keys()]) {
-      if (
-        name.toLowerCase().startsWith("utm_") ||
-        ["fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid", "_ga"].includes(
-          name.toLowerCase()
-        )
-      ) {
-        normalized.searchParams.delete(name);
-      }
-    }
-    return normalized.toString();
-  } catch {
-    return url;
-  }
-}
-
 async function loadTrash() {
   const all = await chrome.storage.local.get(null);
   entries = Object.entries(all)
@@ -37,6 +17,11 @@ async function loadTrash() {
     .sort((a, b) => {
       if (Boolean(b.protected) !== Boolean(a.protected)) {
         return Number(b.protected) - Number(a.protected);
+      }
+      const bScore = protectionScore(b.activeMs, b.restoreCount, b.visitCount);
+      const aScore = protectionScore(a.activeMs, a.restoreCount, a.visitCount);
+      if (bScore !== aScore) {
+        return bScore - aScore;
       }
       if ((b.activeMs || 0) !== (a.activeMs || 0)) {
         return (b.activeMs || 0) - (a.activeMs || 0);
@@ -139,7 +124,8 @@ function render() {
     meta.textContent =
       `${domainOf(entry.url)} · ${timeAgo(entry.closedAt)} · ` +
       `${formatDuration(entry.activeMs)} · ${entry.restoreCount} restore` +
-      `${entry.restoreCount === 1 ? "" : "s"}`;
+      `${entry.restoreCount === 1 ? "" : "s"} · ` +
+      `score ${protectionScore(entry.activeMs, entry.restoreCount, entry.visitCount)}/100`;
 
     details.append(title, meta);
 

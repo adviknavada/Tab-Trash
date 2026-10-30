@@ -8,15 +8,7 @@ const PROTECTED_MAX_COUNT = 200;
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const DISCARDED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const CLEANUP_ALARM = "trash-cleanup";
-const TRACKING_PARAM_NAMES = new Set([
-  "fbclid",
-  "gclid",
-  "dclid",
-  "msclkid",
-  "mc_cid",
-  "mc_eid",
-  "_ga",
-]);
+importScripts("shared.js");
 
 console.log("Tab Trash service worker started");
 chrome.runtime.onInstalled.addListener(() => {
@@ -34,21 +26,8 @@ function activityKey(tabId) {
   return `activity:${tabId}`;
 }
 
-function normalizeUrl(url) {
-  try {
-    const normalized = new URL(url);
-    normalized.hash = "";
-
-    for (const name of [...normalized.searchParams.keys()]) {
-      if (name.toLowerCase().startsWith("utm_") || TRACKING_PARAM_NAMES.has(name.toLowerCase())) {
-        normalized.searchParams.delete(name);
-      }
-    }
-
-    return normalized.toString();
-  } catch {
-    return url;
-  }
+function persistentActivityKey(tabId) {
+  return `metrics:${tabId}`;
 }
 
 async function saveTab(tab) {
@@ -64,15 +43,26 @@ async function initializeActivity(tab, seeded, createdAt = Date.now()) {
   const active = Boolean(tab.active);
   const focusedWindow = await chrome.windows.getLastFocused();
   const isFocusedActive = active && focusedWindow.id === tab.windowId;
-  await chrome.storage.session.set({
-    [activityKey(tab.id)]: {
-      totalMs: 0,
-      activeSince: isFocusedActive ? createdAt : null,
-      createdAt,
-      seeded,
-      pageUrl: normalizeUrl(tab.url || tab.pendingUrl || ""),
-    },
-  });
+  const pageUrl = normalizeUrl(tab.url || tab.pendingUrl || "");
+  const persistentKey = persistentActivityKey(tab.id);
+  const stored = await chrome.storage.local.get(persistentKey);
+  const previous = stored[persistentKey];
+  const now = Date.now();
+  const recoveredMs =
+    previous?.pageUrl === pageUrl && previous.activeSince !== null
+      ? Math.max(0, now - previous.activeSince)
+      : 0;
+  const activity = {
+    totalMs:
+      previous?.pageUrl === pageUrl ? (previous.totalMs || 0) + recoveredMs : 0,
+    activeSince: isFocusedActive ? now : null,
+    createdAt:
+      previous?.pageUrl === pageUrl ? previous.createdAt : createdAt,
+    seeded: previous?.pageUrl === pageUrl ? previous.seeded : seeded,
+    pageUrl,
+  };
+  await chrome.storage.session.set({ [activityKey(tab.id)]: activity });
+  await chrome.storage.local.set({ [persistentKey]: activity });
 }
 
 async function seedLiveMap() {
@@ -106,11 +96,19 @@ async function closeActivitySegment(tabId, now = Date.now()) {
   if (!activity) return null;
 
   if (activity.activeSince !== null) {
-    activity.totalMs += Math.max(0, now - activity.activeSince);
+    const elapsedMs = Math.max(0, now - activity.activeSince);
+    activity.totalMs += elapsedMs;
     activity.activeSince = null;
     await chrome.storage.session.set({ [key]: activity });
+    await persistActivity(tabId, activity);
   }
   return activity;
+}
+
+async function persistActivity(tabId, activity) {
+  await chrome.storage.local.set({
+    [persistentActivityKey(tabId)]: activity,
+  });
 }
 
 async function startActivitySegment(tabId, windowId, now = Date.now()) {
@@ -122,6 +120,7 @@ async function startActivitySegment(tabId, windowId, now = Date.now()) {
   activity.activeSince = now;
   activity.windowId = windowId;
   await chrome.storage.session.set({ [key]: activity });
+  await persistActivity(tabId, activity);
 }
 
 async function resetActivityForUrlChange(tabId, tab) {
@@ -139,6 +138,7 @@ async function resetActivityForUrlChange(tabId, tab) {
   activity.pageUrl = nextUrl;
   activity.activeSince = wasActive ? now : null;
   await chrome.storage.session.set({ [key]: activity });
+  await persistActivity(tabId, activity);
   console.log(`Reset activity for tab ${tabId}: navigated to ${nextUrl}`);
 }
 
@@ -237,7 +237,6 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
   const result = await chrome.storage.session.get([key, flag]);
   const entry = result[key];
   const isFlagged = Boolean(result[flag]);
-
   if (!entry) {
     console.log(`Discarding tab ${tabId}: no saved tab data; activeMs=${activeMs}, lifetimeMs=${lifetimeMs}`);
   } else if (isFlagged) {
@@ -246,7 +245,15 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
       await saveDiscardedEntry(entry, tabId, closedAt, activeMs, lifetimeMs, seeded, "no-url");
     } else {
       console.log(`Keeping tab ${tabId}: rule=flagged; activeMs=${activeMs}, lifetimeMs=${lifetimeMs}`);
-      await saveTrashEntry(entry, tabId, closedAt, activeMs, lifetimeMs, seeded);
+      await saveTrashEntry(
+        entry,
+        tabId,
+        closedAt,
+        activeMs,
+        lifetimeMs,
+        seeded,
+        null
+      );
     }
   } else if (!entry.url) {
     console.log(`Discarding tab ${tabId}: rule=no-url; activeMs=${activeMs}, lifetimeMs=${lifetimeMs}`);
@@ -258,34 +265,53 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
     const score = await visitScore(entry.url);
     if (score === null) {
       console.log(`Keeping tab ${tabId}: rule=visit-unavailable; activeMs=${activeMs}, lifetimeMs=${lifetimeMs}`);
-      await saveTrashEntry(entry, tabId, closedAt, activeMs, lifetimeMs, seeded);
+      await saveTrashEntry(
+        entry,
+        tabId,
+        closedAt,
+        activeMs,
+        lifetimeMs,
+        seeded,
+        score
+      );
     } else if (score >= VISIT_KEEP_MIN) {
       console.log(`Keeping tab ${tabId}: rule=visit-score; activeMs=${activeMs}, lifetimeMs=${lifetimeMs}`);
-      await saveTrashEntry(entry, tabId, closedAt, activeMs, lifetimeMs, seeded);
+      await saveTrashEntry(entry, tabId, closedAt, activeMs, lifetimeMs, seeded, score);
     } else if (isSearchResultsPage(normalizeUrl(entry.url))) {
       console.log(`Discarding tab ${tabId}: rule=search-results; activeMs=${activeMs}, lifetimeMs=${lifetimeMs}`);
       await saveDiscardedEntry(entry, tabId, closedAt, activeMs, lifetimeMs, seeded, "search-results");
     } else {
       console.log(`Keeping tab ${tabId}: rule=default; activeMs=${activeMs}, lifetimeMs=${lifetimeMs}`);
-      await saveTrashEntry(entry, tabId, closedAt, activeMs, lifetimeMs, seeded);
+      await saveTrashEntry(entry, tabId, closedAt, activeMs, lifetimeMs, seeded, score);
     }
   }
   await chrome.storage.session.remove([key, flag, activityKey(tabId)]);
+  await chrome.storage.local.remove(persistentActivityKey(tabId));
 });
 
-async function saveTrashEntry(entry, tabId, closedAt, activeMs, lifetimeMs, seeded) {
+async function saveTrashEntry(
+  entry,
+  tabId,
+  closedAt,
+  activeMs,
+  lifetimeMs,
+  seeded,
+  visitCount
+) {
   const normalizedUrl = normalizeUrl(entry.url);
   const restoreKey = `restore:${normalizedUrl}`;
   const restoreData = await chrome.storage.local.get(restoreKey);
   const restoreCount = restoreData[restoreKey]?.count || 0;
+  const resolvedVisitCount = visitCount;
   const protectedEntry =
     (restoreCount >= RESTORE_PROTECT_MIN &&
       typeof activeMs === "number" &&
       activeMs >= RESTORE_ACTIVE_PROTECT_MIN_MS) ||
     (typeof activeMs === "number" && activeMs >= ACTIVE_PROTECT_MIN_MS);
+  const score = protectionScore(activeMs, restoreCount, resolvedVisitCount);
 
   console.log(
-    `Saving ${normalizedUrl}: protected=${protectedEntry}, restore count=${restoreCount}, activeMs=${activeMs}`
+    `Saving ${normalizedUrl}: protected=${protectedEntry}, protection score=${score}, restore count=${restoreCount}, visits=${resolvedVisitCount}, activeMs=${activeMs}`
   );
   await chrome.storage.local.set({
     [`trash:${closedAt}:${tabId}`]: {
@@ -295,6 +321,8 @@ async function saveTrashEntry(entry, tabId, closedAt, activeMs, lifetimeMs, seed
       activeMs,
       lifetimeMs,
       seeded,
+      visitCount: resolvedVisitCount,
+      protectionScore: score,
       ...(protectedEntry ? { protected: true } : {}),
     },
   });
