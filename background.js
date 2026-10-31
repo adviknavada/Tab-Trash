@@ -33,7 +33,7 @@ function persistentActivityKey(tabId) {
 async function saveTab(tab) {
   await chrome.storage.session.set({
     [tabKey(tab.id)]: {
-      url: tab.url || tab.pendingUrl || "", // url can be empty while a tab is still loading
+      url: tab.url || tab.pendingUrl || "", 
       title: tab.title || "",
     },
   });
