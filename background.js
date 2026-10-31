@@ -89,6 +89,51 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
+chrome.tabs.onReplaced.addListener(async (addedTabId, removedTabId) => {
+  const oldKeys = [
+    tabKey(removedTabId),
+    flagKey(removedTabId),
+    activityKey(removedTabId),
+  ];
+  const oldState = await chrome.storage.session.get(oldKeys);
+  const newState = {};
+
+  for (const [prefix, oldKey] of [
+    ["tab:", tabKey(removedTabId)],
+    ["flag:", flagKey(removedTabId)],
+    ["activity:", activityKey(removedTabId)],
+  ]) {
+    if (oldState[oldKey] !== undefined) {
+      newState[`${prefix}${addedTabId}`] = oldState[oldKey];
+    }
+  }
+
+  if (Object.keys(newState).length > 0) {
+    await chrome.storage.session.set(newState);
+    await chrome.storage.session.remove(oldKeys);
+  }
+
+  const oldPersistentKey = persistentActivityKey(removedTabId);
+  const newPersistentKey = persistentActivityKey(addedTabId);
+  const persistentState = await chrome.storage.local.get(oldPersistentKey);
+  if (persistentState[oldPersistentKey] !== undefined) {
+    await chrome.storage.local.set({
+      [newPersistentKey]: persistentState[oldPersistentKey],
+    });
+    await chrome.storage.local.remove(oldPersistentKey);
+  }
+
+  if (!oldState[tabKey(removedTabId)]) {
+    const tab = await chrome.tabs.get(addedTabId);
+    await saveTab(tab);
+    await initializeActivity(tab, false);
+  }
+
+  console.log(
+    `Transferred tab state from ${removedTabId} to ${addedTabId}`
+  );
+});
+
 async function closeActivitySegment(tabId, now = Date.now()) {
   const key = activityKey(tabId);
   const result = await chrome.storage.session.get(key);
